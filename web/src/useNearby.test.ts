@@ -64,6 +64,18 @@ describe('useNearby', () => {
     expect(result.current.devices.map((d) => d.id)).toEqual(['real'])
   })
 
+  it('starts each demo with a fresh world', async () => {
+    const { result } = renderHook(() => useNearby(DEFAULT_SETTINGS))
+    const first = fakeSource('demo')
+    startWith(result, first)
+    first.emit('old-world')
+    const second = fakeSource('demo')
+    startWith(result, second)
+    second.emit('new-world')
+    await act(() => vi.advanceTimersByTimeAsync(300))
+    expect(result.current.devices.map((d) => d.id)).toEqual(['new-world'])
+  })
+
   it('keeps live devices when switching between live sources', async () => {
     const { result } = renderHook(() => useNearby(DEFAULT_SETTINGS))
     const scan = fakeSource('scan')

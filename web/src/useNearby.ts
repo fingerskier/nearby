@@ -62,8 +62,9 @@ export function useNearby(settings: Settings) {
       stop()
       setError(null)
       setNotice(null)
+      // Every demo start is a new synthetic world, and synthetic devices never mix with real ones.
       const demo = source.kind === 'demo'
-      if (holdsDemoRef.current !== demo) clear()
+      if (demo || holdsDemoRef.current) clear()
       holdsDemoRef.current = demo
       sourceRef.current = source
       setKind(source.kind)

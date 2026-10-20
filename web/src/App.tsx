@@ -21,7 +21,7 @@ export default function App() {
   const [available, setAvailable] = useState<boolean | null>(null)
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [selected, setSelected] = useState<string | null>(null)
-  const { devices, now, kind, error, start, stop, addDevice, clear } = useNearby(settings)
+  const { devices, now, kind, error, notice, start, stop, addDevice, clear } = useNearby(settings)
 
   useEffect(() => saveSettings(settings), [settings])
 
@@ -83,6 +83,11 @@ export default function App() {
       </header>
 
       <SupportNotice support={support} available={available} />
+      {notice && (
+        <p className="notice" role="status">
+          {notice}
+        </p>
+      )}
       {error && (
         <p className="notice error" role="alert">
           {error}

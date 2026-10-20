@@ -49,10 +49,13 @@ const TRUE_EXPONENT = 2
 
 export interface SimDevice extends Profile {
   id: string
+  /** Position in polar form around the observer; x and y mirror it. */
+  r: number
+  theta: number
   x: number
   y: number
-  targetX: number
-  targetY: number
+  targetR: number
+  targetTheta: number
   movedAt: number
   nextAt: number
   phase: number
@@ -66,15 +69,17 @@ export class Simulator {
   constructor(now: number, seed = now) {
     this.random = mulberry32(seed)
     this.devices = PROFILES.map((profile) => {
-      const [x, y] = this.pointIn(profile.minR, profile.maxR)
-      const [targetX, targetY] = this.pointIn(profile.minR, profile.maxR)
+      const [r, theta] = this.pointIn(profile.minR, profile.maxR)
+      const [targetR, targetTheta] = this.pointIn(profile.minR, profile.maxR)
       return {
         ...profile,
         id: this.makeId(),
-        x,
-        y,
-        targetX,
-        targetY,
+        r,
+        theta,
+        x: r * Math.cos(theta),
+        y: r * Math.sin(theta),
+        targetR,
+        targetTheta,
         movedAt: now,
         nextAt: now + this.random() * profile.intervalMs,
         phase: this.random() * 60_000,
@@ -83,7 +88,7 @@ export class Simulator {
   }
 
   distanceTo(device: SimDevice): number {
-    return Math.max(0.1, Math.hypot(device.x, device.y))
+    return Math.max(0.1, device.r)
   }
 
   /** Move the world forward to `now` and return the advertisements heard on the way, oldest first. */
@@ -110,25 +115,28 @@ export class Simulator {
     return (at + device.phase) % (onMs + offMs) < onMs
   }
 
+  /** Radius and bearing are interpolated separately, so a path never cuts inside minR the way a chord would. */
   private move(device: SimDevice, at: number): void {
     let budget = (device.speed * (at - device.movedAt)) / 1000
     device.movedAt = at
     while (budget > 0) {
-      const dx = device.targetX - device.x
-      const dy = device.targetY - device.y
-      const gap = Math.hypot(dx, dy)
+      const dr = device.targetR - device.r
+      const dTheta = wrapAngle(device.targetTheta - device.theta)
+      const gap = Math.hypot(dr, ((device.r + device.targetR) / 2) * dTheta)
       if (gap <= budget) {
-        device.x = device.targetX
-        device.y = device.targetY
+        device.r = device.targetR
+        device.theta = device.targetTheta
         budget -= gap
-        ;[device.targetX, device.targetY] = this.pointIn(device.minR, device.maxR)
+        ;[device.targetR, device.targetTheta] = this.pointIn(device.minR, device.maxR)
         if (gap === 0) break
       } else {
-        device.x += (dx / gap) * budget
-        device.y += (dy / gap) * budget
+        device.r += (dr * budget) / gap
+        device.theta += (dTheta * budget) / gap
         budget = 0
       }
     }
+    device.x = device.r * Math.cos(device.theta)
+    device.y = device.r * Math.sin(device.theta)
   }
 
   private sight(device: SimDevice, at: number): Sighting {
@@ -143,10 +151,9 @@ export class Simulator {
     }
   }
 
+  /** A random [r, theta] in the annulus. */
   private pointIn(minR: number, maxR: number): [number, number] {
-    const r = minR + this.random() * (maxR - minR)
-    const theta = this.random() * 2 * Math.PI
-    return [r * Math.cos(theta), r * Math.sin(theta)]
+    return [minR + this.random() * (maxR - minR), this.random() * 2 * Math.PI]
   }
 
   /** Box–Muller standard normal. */
@@ -163,6 +170,12 @@ export class Simulator {
     for (let i = 0; i < 22; i++) id += alphabet[Math.floor(this.random() * alphabet.length)]
     return `${id}==`
   }
+}
+
+/** Shortest signed turn, in (−π, π]. */
+function wrapAngle(angle: number): number {
+  const turn = 2 * Math.PI
+  return Math.PI - ((((Math.PI - angle) % turn) + turn) % turn)
 }
 
 const TICK_MS = 100

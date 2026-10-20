@@ -78,50 +78,73 @@ export class LeScanSource implements ScanSource {
   }
 }
 
+interface Watch {
+  device: BluetoothDevice
+  abort: AbortController
+  listener: (event: BluetoothAdvertisingEvent) => void
+}
+
 /** Devices chosen one at a time in the browser's picker, each followed with watchAdvertisements(). */
 export class WatchSource implements ScanSource {
   readonly kind = 'watch'
   private emit?: (sighting: Sighting) => void
-  private watched = new Map<string, () => void>()
+  private watches = new Map<string, Watch>()
 
-  get count(): number {
-    return this.watched.size
+  /** Browsers abort watches while the page is hidden; pick them back up when it is visible again. */
+  private readonly onVisibilityChange = () => {
+    if (document.visibilityState !== 'visible') return
+    for (const { device } of [...this.watches.values()]) {
+      if (!device.watchingAdvertisements) this.watch(device).catch(() => {})
+    }
   }
 
   async start(emit: (sighting: Sighting) => void): Promise<void> {
     this.emit = emit
+    document.addEventListener('visibilitychange', this.onVisibilityChange)
   }
 
-  /** Opens the device chooser, so it must run from a user gesture. */
+  /** Opens the device chooser, so it must run from a user gesture. Re-picking a lapsed device restarts its watch. */
   async add(): Promise<void> {
     const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true })
+    if (this.watches.get(device.id)?.device.watchingAdvertisements) return
+    await this.watch(device)
+  }
+
+  stop(): void {
+    document.removeEventListener('visibilitychange', this.onVisibilityChange)
+    for (const id of [...this.watches.keys()]) this.unwatch(id)
+    this.emit = undefined
+  }
+
+  private async watch(device: BluetoothDevice): Promise<void> {
     const emit = this.emit
-    if (!emit || this.watched.has(device.id)) return
-    const abort = new AbortController()
-    const listener = (event: BluetoothAdvertisingEvent) => {
-      const sighting = toSighting(event)
-      if (sighting) emit(sighting)
+    if (!emit) return
+    this.unwatch(device.id)
+    const watch: Watch = {
+      device,
+      abort: new AbortController(),
+      listener: (event) => {
+        const sighting = toSighting(event)
+        if (sighting) emit(sighting)
+      },
     }
-    device.addEventListener('advertisementreceived', listener)
-    const unwatch = () => {
-      abort.abort()
-      device.removeEventListener('advertisementreceived', listener)
-    }
-    this.watched.set(device.id, unwatch)
+    device.addEventListener('advertisementreceived', watch.listener)
+    this.watches.set(device.id, watch)
     try {
-      await device.watchAdvertisements({ signal: abort.signal })
+      await device.watchAdvertisements({ signal: watch.abort.signal })
     } catch (error) {
-      if (abort.signal.aborted) return
-      unwatch()
-      this.watched.delete(device.id)
+      if (watch.abort.signal.aborted) return
+      if (this.watches.get(device.id) === watch) this.unwatch(device.id)
       throw error
     }
   }
 
-  stop(): void {
-    for (const unwatch of this.watched.values()) unwatch()
-    this.watched.clear()
-    this.emit = undefined
+  private unwatch(id: string): void {
+    const watch = this.watches.get(id)
+    if (!watch) return
+    watch.abort.abort()
+    watch.device.removeEventListener('advertisementreceived', watch.listener)
+    this.watches.delete(id)
   }
 }
 

@@ -60,7 +60,9 @@ describe('Simulator', () => {
     const start = simulator.devices.map((d) => [d.x, d.y])
     run(simulator, 120_000, () => {
       for (const device of simulator.devices) {
-        expect(Math.hypot(device.x, device.y)).toBeLessThanOrEqual(device.maxR + 1e-9)
+        const r = Math.hypot(device.x, device.y)
+        expect(r).toBeGreaterThanOrEqual(device.minR - 1e-9)
+        expect(r).toBeLessThanOrEqual(device.maxR + 1e-9)
       }
     })
     simulator.devices.forEach((device, i) => {

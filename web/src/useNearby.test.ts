@@ -38,6 +38,7 @@ describe('useNearby', () => {
   afterEach(() => {
     vi.useRealTimers()
     setVisibility('visible')
+    delete (navigator as { bluetooth?: unknown }).bluetooth
   })
 
   async function startWith(hook: { current: ReturnType<typeof useNearby> }, fake: ReturnType<typeof fakeSource>) {
@@ -111,6 +112,27 @@ describe('useNearby', () => {
     })
     expect(result.current.error).toMatch(/permission/i)
     expect(result.current.kind).toBeNull()
+  })
+
+  it('clears an Add device failure once a retry succeeds', async () => {
+    const device = {
+      id: 'picked',
+      watchingAdvertisements: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      watchAdvertisements: vi.fn(async () => {}),
+    }
+    const requestDevice = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException('denied', 'NotAllowedError'))
+      .mockResolvedValueOnce(device)
+    Object.defineProperty(navigator, 'bluetooth', { configurable: true, value: { requestDevice } })
+    const { result } = renderHook(() => useNearby(DEFAULT_SETTINGS))
+    await act(() => result.current.addDevice())
+    expect(result.current.error).toMatch(/permission/i)
+    await act(() => result.current.addDevice())
+    expect(device.watchAdvertisements).toHaveBeenCalled()
+    expect(result.current.error).toBeNull()
   })
 
   it('stops an LE scan when the page is hidden and says how to resume', async () => {

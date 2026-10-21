@@ -82,6 +82,7 @@ export function useNearby(settings: Settings) {
 
   /** Pick one more device in the browser's chooser and follow its advertisements. */
   const addDevice = useCallback(async () => {
+    setError(null)
     let source = sourceRef.current
     if (!(source instanceof WatchSource)) {
       source = new WatchSource()

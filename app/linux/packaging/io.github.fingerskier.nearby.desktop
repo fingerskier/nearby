@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=nearby
+GenericName=Bluetooth watch
+Comment=Detect nearby Bluetooth devices and alert when an unlisted one comes into range
+Exec=@EXEC@
+Icon=io.github.fingerskier.nearby
+Terminal=false
+Categories=Utility;
+Keywords=bluetooth;ble;proximity;whitelist;
+StartupWMClass=io.github.fingerskier.nearby

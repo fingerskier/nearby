@@ -4,7 +4,7 @@ A Flutter desktop app that watches for Bluetooth devices around this computer, k
 
 ## How it works
 
-- **Scanning.** The app runs BlueZ discovery over the system D-Bus. No root is needed, but `bluetoothd` must be running and the adapter powered on. It sets `DuplicateData`, so BlueZ reports RSSI for every advertisement. Bluetooth LE is on by default; Settings can add Classic inquiry.
+- **Scanning.** The app runs BlueZ discovery over the system D-Bus. No root is needed, but `bluetoothd` must be running and the adapter powered on. It sets `DuplicateData` and a permissive `RSSI` filter, so BlueZ reports RSSI for every advertisement rather than only on changes of 8 dB or more. Bluetooth LE is on by default; Settings can add Classic inquiry.
 - **Distance.** Each device's RSSI is smoothed with a Kalman filter, then converted to metres with the log-distance path-loss model. The 1 m reference comes from a per-device calibration if there is one, then from the device's advertised TX power, then from a default. This is the same model as the web app. Expect a few metres of error indoors.
 - **Learning.** On first launch, as soon as scanning starts, the app learns for 2 minutes and whitelists every device it sees whose address is stable. Until one learning session has finished, every launch learns again. **Learn** repeats this at any time. You can also tick devices in the list, or use **Whitelist all in range**.
 - **Alerts.** An *arrival* is an unlisted device heard at least twice after being away for the out-of-range time (1 minute by default). Each arrival plays `device-added.oga` from the freedesktop sound theme, trying `pw-play`, then `paplay`, then `canberra-gtk-play`. It also shows a desktop notification with a **Whitelist** button.

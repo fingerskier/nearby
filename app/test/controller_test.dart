@@ -1,9 +1,13 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nearby/src/controller.dart';
 import 'package:nearby/src/core/address.dart';
 import 'package:nearby/src/core/settings.dart';
 import 'package:nearby/src/core/whitelist.dart';
+import 'package:nearby/src/scan/scanner.dart';
 import 'package:nearby/src/store.dart';
 
 import 'fakes.dart';
@@ -13,8 +17,24 @@ const stranger = 'AA:00:00:00:00:02';
 const visitor = 'AA:00:00:00:00:03';
 const phone = '6E:1B:00:00:00:04';
 
+/// Fails the first [failures] writes, like a full disk that later frees up.
+class FlakyStore extends MemoryStore {
+  FlakyStore(this.failures);
+
+  int failures;
+
+  @override
+  Future<void> write(String name, Object? json) async {
+    if (failures > 0) {
+      failures -= 1;
+      throw const FileSystemException('disk full');
+    }
+    await super.write(name, json);
+  }
+}
+
 class Rig {
-  Rig(this.async, {Map<String, Object?>? saved}) : store = MemoryStore(saved);
+  Rig(this.async, {Map<String, Object?>? saved, MemoryStore? store}) : store = store ?? MemoryStore(saved);
 
   final FakeAsync async;
   final MemoryStore store;
@@ -47,8 +67,10 @@ class Rig {
   void settle() => async.elapse(const Duration(seconds: 3));
 }
 
+/// A setup that has finished learning before, with [addresses] whitelisted.
 Map<String, Object?> savedWhitelist(List<String> addresses) => {
   whitelistFile: (Whitelist()..addAll(addresses)).toJson(),
+  stateFile: {'learned': true},
 };
 
 extension on Whitelist {
@@ -60,6 +82,8 @@ extension on Whitelist {
 }
 
 void main() {
+  group('review fixes', reviewFixes);
+
   test('a first run learns what is around, then alerts on newcomers', () {
     fakeAsync((async) {
       final rig = Rig(async)..start();
@@ -266,6 +290,151 @@ void main() {
       expect(rig.controller.devices.single.distance, closeTo(1, 1e-6));
       rig.controller.clearCalibration(lamp);
       expect(rig.controller.settings.calibrations, isEmpty);
+      rig.controller.dispose();
+    });
+  });
+}
+
+void reviewFixes() {
+  test('first-run learning waits until scanning actually starts', () {
+    fakeAsync((async) {
+      final rig = Rig(async);
+      rig.scanner.startAs = ScannerStatus.poweredOff;
+      rig.start();
+      expect(rig.controller.learningPending, isTrue);
+      async.elapse(const Duration(minutes: 5));
+      expect(rig.controller.learning, isFalse, reason: 'nothing to learn while Bluetooth is off');
+      rig.scanner.powerOn();
+      expect(rig.controller.learning, isTrue);
+      rig.hear(lamp);
+      async.elapse(const Duration(minutes: 2));
+      expect(rig.controller.learning, isFalse);
+      expect(rig.controller.whitelist.contains(lamp), isTrue);
+      expect(rig.store.documents[stateFile], {'learned': true});
+      rig.controller.dispose();
+    });
+  });
+
+  test('a learning session that found nothing still ends first-run learning', () {
+    fakeAsync((async) {
+      final first = Rig(async)..start();
+      async.elapse(const Duration(minutes: 3));
+      first.controller.dispose();
+      async.flushMicrotasks();
+      expect(first.store.documents[stateFile], {'learned': true});
+
+      final second = Rig(async, store: first.store)..start();
+      expect(second.controller.learning, isFalse);
+      expect(second.controller.learningPending, isFalse);
+      second.controller.dispose();
+    });
+  });
+
+  test('changing a setting during first-run learning does not skip learning next time', () {
+    fakeAsync((async) {
+      final first = Rig(async)..start();
+      first.controller.updateSettings(first.controller.settings.copyWith(ping: false));
+      async.elapse(const Duration(seconds: 5));
+      first.controller.dispose();
+      async.flushMicrotasks();
+      expect(first.store.documents[stateFile], {'learned': false});
+
+      final second = Rig(async, store: first.store)..start();
+      expect(second.controller.learning, isTrue);
+      second.controller.dispose();
+    });
+  });
+
+  test('an alert waiting to go out is dropped when learning starts or scanning pauses', () {
+    fakeAsync((async) {
+      final rig = Rig(async, saved: savedWhitelist([]))..start();
+      rig.hear(stranger, times: 2, every: const Duration(milliseconds: 100));
+      rig.controller.startLearning();
+      rig.settle();
+      expect(rig.pinger.pings, 0);
+      expect(rig.notifier.shown, isEmpty);
+
+      rig.controller.stopLearning();
+      rig.hear(visitor, times: 2, every: const Duration(milliseconds: 100));
+      rig.controller.pause();
+      rig.settle();
+      expect(rig.pinger.pings, 0);
+      expect(rig.controller.arrivals, isEmpty);
+      rig.controller.dispose();
+    });
+  });
+
+  test('a dismissed notification forgets its devices', () {
+    fakeAsync((async) {
+      final rig = Rig(async, saved: savedWhitelist([]))..start();
+      rig.hear(stranger);
+      rig.settle();
+      rig.notifier.dismiss(1);
+      rig.notifier.press(1, 'whitelist');
+      async.elapse(const Duration(seconds: 1));
+      expect(rig.controller.whitelist.contains(stranger), isFalse);
+      rig.controller.dispose();
+    });
+  });
+
+  test('settings changes in quick succession leave a single duty cycle running', () {
+    fakeAsync((async) {
+      final rig = Rig(
+        async,
+        saved: {...savedWhitelist([]), settingsFile: const Settings(scanOnSeconds: 10, scanOffSeconds: 20).toJson()},
+      )..start();
+      rig.controller.updateSettings(rig.controller.settings.copyWith(scanOnSeconds: 15));
+      rig.controller.updateSettings(rig.controller.settings.copyWith(scanOnSeconds: 20));
+      async.elapse(const Duration(seconds: 21));
+      expect(rig.scanner.calls.where((call) => call == 'stop'), hasLength(1));
+      rig.controller.dispose();
+      async.flushMicrotasks();
+      expect(async.pendingTimers, isEmpty);
+    });
+  });
+
+  test('disposing while still starting leaves nothing running', () {
+    fakeAsync((async) {
+      // While settings load…
+      final loading = Rig(async);
+      unawaited(loading.controller.start());
+      loading.controller.dispose();
+      async.flushMicrotasks();
+      expect(loading.scanner.calls, isNot(contains('open')));
+
+      // …and while the scanner opens.
+      final opening = Rig(async);
+      opening.scanner.holdOpen = Completer();
+      unawaited(opening.controller.start());
+      async.flushMicrotasks();
+      opening.controller.dispose();
+      opening.scanner.holdOpen!.complete();
+      async.flushMicrotasks();
+      expect(opening.scanner.calls, ['open', 'close']);
+      expect(async.pendingTimers, isEmpty);
+    });
+  });
+
+  test('shutdown writes pending changes at once', () {
+    fakeAsync((async) {
+      final rig = Rig(async, saved: savedWhitelist([]))..start();
+      rig.controller.setWhitelisted(lamp, true);
+      unawaited(rig.controller.shutdown());
+      async.flushMicrotasks();
+      expect((rig.store.documents[whitelistFile] as List).single, containsPair('address', lamp));
+      expect(rig.scanner.calls.last, 'close');
+    });
+  });
+
+  test('a failed save is retried', () {
+    fakeAsync((async) {
+      final store = FlakyStore(1)..documents.addAll(savedWhitelist([]));
+      final rig = Rig(async, store: store)..start();
+      rig.controller.setWhitelisted(lamp, true);
+      async.elapse(const Duration(seconds: 1));
+      expect((store.documents[whitelistFile] as List), isEmpty, reason: 'the first write failed');
+      async.elapse(const Duration(seconds: 10));
+      expect((store.documents[whitelistFile] as List).single, containsPair('address', lamp));
       rig.controller.dispose();
     });
   });

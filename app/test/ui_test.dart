@@ -11,6 +11,12 @@ const lamp = 'AA:00:00:00:00:01';
 const stranger = 'AA:00:00:00:00:02';
 const phone = '6E:1B:00:00:00:04';
 
+/// Learning has finished before and nothing is whitelisted.
+const guarding = <String, Object?>{
+  whitelistFile: <Object?>[],
+  stateFile: {'learned': true},
+};
+
 void main() {
   late FakeScanner scanner;
   NearbyController? running;
@@ -61,7 +67,7 @@ void main() {
   });
 
   appTest('lists unlisted devices, and ticking one whitelists it', (tester) async {
-    final controller = await pumpApp(tester, saved: {whitelistFile: <Object?>[]});
+    final controller = await pumpApp(tester, saved: guarding);
     hear(tester, lamp, name: 'Lamp');
     hear(tester, stranger, name: 'Stranger');
     hear(tester, phone, kind: AddressKind.resolvable);
@@ -86,7 +92,7 @@ void main() {
   });
 
   appTest('arrivals can be whitelisted from the log', (tester) async {
-    final controller = await pumpApp(tester, saved: {whitelistFile: <Object?>[]});
+    final controller = await pumpApp(tester, saved: guarding);
     hear(tester, stranger, name: 'Stranger');
     await tester.pump(const Duration(seconds: 2));
     expect(controller.arrivals, hasLength(1));
@@ -97,7 +103,7 @@ void main() {
   });
 
   appTest('shows when Bluetooth is off', (tester) async {
-    await pumpApp(tester, saved: {whitelistFile: <Object?>[]});
+    await pumpApp(tester, saved: guarding);
     scanner.powerOff();
     await tester.pump();
     expect(find.text('Bluetooth off'), findsOneWidget);
@@ -105,7 +111,7 @@ void main() {
   });
 
   appTest('settings and whitelist pages open and edit', (tester) async {
-    final controller = await pumpApp(tester, saved: {whitelistFile: <Object?>[]});
+    final controller = await pumpApp(tester, saved: guarding);
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Ping'));

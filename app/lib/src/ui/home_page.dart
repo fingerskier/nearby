@@ -54,7 +54,12 @@ class HomePage extends StatelessWidget {
             : Column(
                 children: [
                   if (controller.learning) _LearningBanner(controller: controller),
-                  if (_problem(controller.scannerState) case final problem?) _ProblemBanner(message: problem),
+                  if (_problem(controller.scannerState) case final problem?)
+                    _ProblemBanner(
+                      message: controller.learningPending
+                          ? '$problem Learning the devices around you starts once scanning does.'
+                          : problem,
+                    ),
                   Expanded(child: _Panels(controller: controller)),
                 ],
               ),

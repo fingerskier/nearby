@@ -60,19 +60,36 @@ class FakeScanner implements Scanner {
 
   void powerOff() => _set(ScannerStatus.poweredOff);
 
+  /// Bluetooth came back on; a scanner that was asked to scan resumes.
+  void powerOn() => _set(wanted ? ScannerStatus.scanning : ScannerStatus.idle);
+
+  /// Whether discovery was last requested (rather than stopped), whatever the adapter is doing.
+  var wanted = false;
+
+  /// Start the next startDiscovery() in this state instead of scanning.
+  ScannerStatus? startAs;
+
+  /// While set, open() waits for it.
+  Completer<void>? holdOpen;
+
   @override
-  Future<void> open() async => calls.add('open');
+  Future<void> open() async {
+    calls.add('open');
+    await holdOpen?.future;
+  }
 
   @override
   Future<void> startDiscovery({required bool classic}) async {
     calls.add(classic ? 'start classic' : 'start');
-    _set(ScannerStatus.scanning);
+    wanted = true;
+    _set(startAs ?? ScannerStatus.scanning);
   }
 
   @override
   Future<void> stopDiscovery() async {
     calls.add('stop');
-    _set(ScannerStatus.idle);
+    wanted = false;
+    if (state.status == ScannerStatus.scanning) _set(ScannerStatus.idle);
   }
 
   @override
@@ -92,12 +109,19 @@ class FakePinger implements Pinger {
 class FakeNotifier implements Notifier {
   final shown = <Notice>[];
   final _actions = StreamController<NoticeAction>.broadcast(sync: true);
+  final _closed = StreamController<int>.broadcast(sync: true);
 
   @override
   Stream<NoticeAction> get actions => _actions.stream;
 
+  @override
+  Stream<int> get closed => _closed.stream;
+
   /// Presses [key] on the notice with [id] (1-based, in the order shown).
   void press(int id, String key) => _actions.add(NoticeAction(id, key));
+
+  /// The notice with [id] expired or was dismissed.
+  void dismiss(int id) => _closed.add(id);
 
   @override
   Future<int?> show(Notice notice) async {

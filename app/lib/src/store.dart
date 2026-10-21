@@ -13,6 +13,7 @@ class JsonFileStore implements Store {
   JsonFileStore(this.directory);
 
   final Directory directory;
+  var _writes = 0;
 
   @override
   Future<Object?> read(String name) async {
@@ -25,11 +26,12 @@ class JsonFileStore implements Store {
     }
   }
 
-  /// Writes a temporary file and renames it over the old one, so a crash never leaves half a file.
+  /// Writes a temporary file and renames it over the old one, so a crash never leaves half a file. Each write
+  /// gets its own temporary name, so overlapping writes (or two app instances) can't truncate each other's.
   @override
   Future<void> write(String name, Object? json) async {
     await directory.create(recursive: true);
-    final temporary = File('${directory.path}/$name.tmp');
+    final temporary = File('${directory.path}/$name.$pid.${_writes++}.tmp');
     await temporary.writeAsString(const JsonEncoder.withIndent('  ').convert(json), flush: true);
     await temporary.rename('${directory.path}/$name');
   }

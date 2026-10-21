@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:async/async.dart';
 import 'package:dbus/dbus.dart';
 
 class Notice {
@@ -23,6 +24,9 @@ abstract interface class Notifier {
   /// Buttons pressed on notifications, from any app; match them by id.
   Stream<NoticeAction> get actions;
 
+  /// Ids of notifications that are gone: expired, dismissed, or lost when the notification server restarted.
+  Stream<int> get closed;
+
   /// Shows [notice] and returns its id, or null if no notification server answered.
   Future<int?> show(Notice notice);
 
@@ -43,6 +47,7 @@ class DesktopNotifier implements Notifier {
   final String desktopEntry;
   late final _object = DBusRemoteObject(_bus, name: _name, path: DBusObjectPath('/org/freedesktop/Notifications'));
   Future<bool>? _markup;
+  final _shown = <int>{};
 
   @override
   late final Stream<NoticeAction> actions = DBusRemoteObjectSignalStream(
@@ -51,6 +56,22 @@ class DesktopNotifier implements Notifier {
     name: 'ActionInvoked',
     signature: DBusSignature('us'),
   ).map((signal) => NoticeAction(signal.values[0].asUint32(), signal.values[1].asString()));
+
+  @override
+  late final Stream<int> closed = StreamGroup.merge([
+    DBusRemoteObjectSignalStream(
+      object: _object,
+      interface: _name,
+      name: 'NotificationClosed',
+      signature: DBusSignature('uu'),
+    ).map((signal) => signal.values[0].asUint32()).where(_shown.remove),
+    // A restarted server forgets every notification, and its ids start over.
+    _bus.nameOwnerChanged.where((event) => event.name == _name).expand((_) {
+      final gone = _shown.toList();
+      _shown.clear();
+      return gone;
+    }),
+  ]).asBroadcastStream();
 
   @override
   Future<int?> show(Notice notice) async {
@@ -72,7 +93,9 @@ class DesktopNotifier implements Notifier {
         }),
         const DBusInt32(-1),
       ], replySignature: DBusSignature('u'));
-      return result.returnValues.first.asUint32();
+      final id = result.returnValues.first.asUint32();
+      _shown.add(id);
+      return id;
     } on DBusMethodResponseException {
       return null;
     }

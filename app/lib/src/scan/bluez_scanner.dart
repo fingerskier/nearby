@@ -64,9 +64,10 @@ String describeDBusError(Object error) {
 
 /// Discovers devices through BlueZ on the system D-Bus.
 ///
-/// Discovery runs with DuplicateData set, so BlueZ updates RSSI on every advertisement instead of only
-/// on big changes; each RSSI update is one sighting. BlueZ ties the discovery session to this D-Bus
-/// connection, so it ends if the app exits without stopping it.
+/// Discovery runs with DuplicateData and a permissive RSSI filter. Together they make BlueZ update RSSI on
+/// every advertisement; without a proximity (RSSI or path-loss) filter, current BlueZ only reports changes
+/// of 8 dB or more, so a device sitting still would fall silent. Each RSSI update is one sighting. BlueZ ties
+/// the discovery session to this D-Bus connection, so it ends if the app exits without stopping it.
 class BluezScanner implements Scanner {
   BluezScanner({DBusClient? bus, DateTime Function()? clock})
     : _bus = bus ?? DBusClient.system(),
@@ -80,15 +81,17 @@ class BluezScanner implements Scanner {
   final _sightings = StreamController<Sighting>.broadcast();
   final _states = StreamController<ScannerState>.broadcast();
   final _devices = <DBusObjectPath, Map<String, DBusValue>>{};
-  StreamSubscription<DBusSignal>? _subscription;
+  final _subscriptions = <StreamSubscription<Object?>>[];
   DBusRemoteObject? _adapter;
   var _adapterProperties = <String, DBusValue>{};
   var _state = const ScannerState(ScannerStatus.starting);
   var _wanted = false;
   var _classic = false;
   var _discovering = false;
+  var _closed = false;
   String? _error;
   Timer? _retry;
+  Future<void> _queue = Future.value();
 
   @override
   Stream<Sighting> get sightings => _sightings.stream;
@@ -104,7 +107,41 @@ class BluezScanner implements Scanner {
   @override
   Future<void> open() async {
     // Subscribe first, so nothing that changes during GetManagedObjects is missed.
-    _subscription = _manager.signals.listen(_onSignal);
+    _subscriptions
+      ..add(_manager.signals.listen(_onSignal))
+      ..add(_bus.nameOwnerChanged.where((event) => event.name == _bluez).listen(_onOwnerChanged));
+    await _enumerate();
+  }
+
+  @override
+  Future<void> startDiscovery({required bool classic}) {
+    _wanted = true;
+    _classic = classic;
+    return _reconcile();
+  }
+
+  @override
+  Future<void> stopDiscovery() {
+    _wanted = false;
+    return _reconcile();
+  }
+
+  @override
+  Future<void> close() async {
+    if (_closed) return;
+    await stopDiscovery();
+    _closed = true;
+    _retry?.cancel();
+    for (final subscription in _subscriptions) {
+      await subscription.cancel();
+    }
+    await _sightings.close();
+    await _states.close();
+    if (_ownsBus) await _bus.close();
+  }
+
+  /// Reads every BlueZ object afresh: at open, and when bluetoothd (re)appears.
+  Future<void> _enumerate() async {
     try {
       final objects = await _manager.getManagedObjects();
       objects.forEach(_onAdded);
@@ -115,60 +152,56 @@ class BluezScanner implements Scanner {
     _refresh();
   }
 
-  @override
-  Future<void> startDiscovery({required bool classic}) async {
-    _wanted = true;
-    _classic = classic;
-    await _start();
+  /// A bluetoothd that crashes never sends InterfacesRemoved, so forget whatever the old owner had,
+  /// and start over with the new one.
+  void _onOwnerChanged(DBusNameOwnerChangedEvent event) {
+    _adapter = null;
+    _adapterProperties = {};
+    _devices.clear();
+    _discovering = false;
+    _refresh();
+    if (event.newOwner != null) unawaited(_enumerate());
   }
 
-  @override
-  Future<void> stopDiscovery() async {
-    _wanted = false;
+  /// Queues a pass that brings BlueZ in line with what was last asked for. Passes run one at a time and
+  /// each reads the latest request, so a stop that arrives while a start is in flight still ends discovery.
+  Future<void> _reconcile() => _queue = _queue.then((_) => _apply());
+
+  Future<void> _apply() async {
     _retry?.cancel();
     final adapter = _adapter;
-    if (adapter != null && _discovering) {
+    if (_closed || adapter == null || !_powered) {
+      _discovering = false;
+      return _refresh();
+    }
+    if (_wanted) {
+      try {
+        await adapter.callMethod(_adapterInterface, 'SetDiscoveryFilter', [
+          DBusDict.stringVariant({
+            'Transport': DBusString(_classic ? 'auto' : 'le'),
+            'DuplicateData': const DBusBoolean(true),
+            'RSSI': const DBusInt16(-127),
+          }),
+        ], replySignature: DBusSignature.empty);
+        await adapter.callMethod(_adapterInterface, 'StartDiscovery', const [], replySignature: DBusSignature.empty);
+        _discovering = true;
+        _error = null;
+      } catch (error) {
+        if (error is DBusMethodResponseException && error.errorName == 'org.bluez.Error.InProgress') {
+          _discovering = true;
+          _error = null;
+        } else {
+          _discovering = false;
+          _error = describeDBusError(error);
+          _retry = Timer(_retryAfter, () => unawaited(_reconcile()));
+        }
+      }
+    } else if (_discovering) {
       _discovering = false;
       try {
         await adapter.callMethod(_adapterInterface, 'StopDiscovery', const [], replySignature: DBusSignature.empty);
-      } on DBusMethodResponseException {
-        // Discovery already ended (adapter reset or powered off); nothing to stop.
-      }
-    }
-    _refresh();
-  }
-
-  @override
-  Future<void> close() async {
-    await stopDiscovery();
-    await _subscription?.cancel();
-    await _sightings.close();
-    await _states.close();
-    if (_ownsBus) await _bus.close();
-  }
-
-  Future<void> _start() async {
-    _retry?.cancel();
-    final adapter = _adapter;
-    if (!_wanted || adapter == null || !_powered) return _refresh();
-    try {
-      await adapter.callMethod(_adapterInterface, 'SetDiscoveryFilter', [
-        DBusDict.stringVariant({
-          'Transport': DBusString(_classic ? 'auto' : 'le'),
-          'DuplicateData': const DBusBoolean(true),
-        }),
-      ], replySignature: DBusSignature.empty);
-      await adapter.callMethod(_adapterInterface, 'StartDiscovery', const [], replySignature: DBusSignature.empty);
-      _discovering = true;
-      _error = null;
-    } on DBusMethodResponseException catch (error) {
-      if (error.errorName == 'org.bluez.Error.InProgress') {
-        _discovering = true;
-        _error = null;
-      } else {
-        _discovering = false;
-        _error = describeDBusError(error);
-        _retry = Timer(_retryAfter, () => unawaited(_start()));
+      } catch (_) {
+        // Discovery already ended (adapter reset, powered off, or bluetoothd gone); nothing to stop.
       }
     }
     _refresh();
@@ -199,8 +232,8 @@ class BluezScanner implements Scanner {
     if (adapter != null && _adapter == null) {
       _adapter = DBusRemoteObject(_bus, name: _bluez, path: path);
       _adapterProperties = Map.of(adapter);
-      // A restarted bluetoothd brings its adapter back without our discovery session.
-      if (_wanted) unawaited(_start());
+      // A new or restarted bluetoothd brings its adapter back without our discovery session.
+      if (_wanted) unawaited(_reconcile());
     }
     final device = interfaces[_deviceInterface];
     if (device != null) {
@@ -223,7 +256,7 @@ class BluezScanner implements Scanner {
       if (!_powered) {
         _discovering = false;
       } else if (!wasPowered) {
-        unawaited(_start());
+        unawaited(_reconcile());
       }
       _refresh();
     }
@@ -231,7 +264,7 @@ class BluezScanner implements Scanner {
 
   void _emit(DBusObjectPath path, Map<String, DBusValue> properties) {
     final adapter = _adapter;
-    if (!_wanted || adapter == null || !path.isInNamespace(adapter.path)) return;
+    if (!_wanted || _sightings.isClosed || adapter == null || !path.isInNamespace(adapter.path)) return;
     final sighting = sightingFromProperties(properties, _clock());
     if (sighting != null) _sightings.add(sighting);
   }

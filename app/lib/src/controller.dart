@@ -24,6 +24,9 @@ class ArrivalRecord {
 const settingsFile = 'settings.json';
 const whitelistFile = 'whitelist.json';
 
+/// Remembers whether a learning session has ever finished, so first-run learning happens exactly once.
+const stateFile = 'state.json';
+
 /// Arrivals this close together share one ping and one notification.
 const _batchWindow = Duration(milliseconds: 1500);
 
@@ -31,7 +34,11 @@ const _batchWindow = Duration(milliseconds: 1500);
 const alertGap = Duration(seconds: 10);
 const _tickEvery = Duration(milliseconds: 500);
 const _saveAfter = Duration(milliseconds: 500);
+const _saveRetryAfter = Duration(seconds: 10);
 const _arrivalLog = 100;
+
+/// Notifications whose buttons are still remembered; older ones are long gone from any screen.
+const _openNotices = 20;
 
 /// Runs the scanner, ranges what it hears, keeps the whitelist, and raises alerts.
 class NearbyController extends ChangeNotifier {
@@ -63,12 +70,18 @@ class NearbyController extends ChangeNotifier {
   var _paused = false;
   var _resting = false;
   var _disposed = false;
+  var _learnedOnce = false;
+  var _learnWhenScanning = false;
+  var _wasLearning = false;
+  var _scanGeneration = 0;
+  var _dirty = false;
   Timer? _ticker;
   Timer? _cycle;
   Timer? _flushTimer;
   Timer? _saveTimer;
   DateTime? _lastAlertAt;
-  var _dirty = false;
+  Future<void> _saving = Future.value();
+  Future<void>? _shutdown;
 
   bool get ready => _ready;
   Settings get settings => _settings;
@@ -87,64 +100,87 @@ class NearbyController extends ChangeNotifier {
   bool get resting => _resting;
   bool get learning => _guard.isLearning(_now);
 
+  /// First-run learning is waiting for the scanner to start.
+  bool get learningPending => _learnWhenScanning;
+
   Duration get learnLeft => learning ? _guard.learnUntil!.difference(_now) : Duration.zero;
 
-  /// Loads settings and the whitelist, then starts scanning. A first run (no whitelist saved yet)
-  /// starts in learning mode, so whatever is already around doesn't set off alerts.
+  /// Loads settings and the whitelist, then starts scanning. Until a learning session has finished once,
+  /// the app learns as soon as scanning starts, so whatever is already around doesn't set off alerts.
   Future<void> start() async {
     _settings = Settings.fromJson(await store.read(settingsFile));
-    final savedWhitelist = await store.read(whitelistFile);
-    _whitelist = Whitelist.fromJson(savedWhitelist);
+    _whitelist = Whitelist.fromJson(await store.read(whitelistFile));
+    final state = await store.read(stateFile);
+    if (_disposed) return;
+    _learnedOnce = (state is Map && state['learned'] == true) || _whitelist.length > 0;
+    _learnWhenScanning = !_learnedOnce;
     _tracker = Tracker(_settings);
     _guard = Guard(_settings, _whitelist);
     _now = _clock();
-    if (savedWhitelist == null) _guard.startLearning(_now);
     _subscriptions
       ..add(scanner.sightings.listen(_onSighting))
-      ..add(scanner.states.listen((_) => notifyListeners()))
-      ..add(notifier.actions.listen(_onNoticeAction, onError: (Object _) {}));
+      ..add(scanner.states.listen((_) => _onScannerState()))
+      ..add(notifier.actions.listen(_onNoticeAction, onError: (Object _) {}))
+      ..add(notifier.closed.listen(_noticeTargets.remove, onError: (Object _) {}));
     await scanner.open();
+    if (_disposed) return;
     _ticker = Timer.periodic(_tickEvery, (_) => _tick());
     _ready = true;
     await _applyScanning();
-    notifyListeners();
+    _changed();
+  }
+
+  /// Stops scanning and timers and writes anything unsaved. Safe to call more than once; [dispose] calls it.
+  Future<void> shutdown() => _shutdown ??= _close();
+
+  Future<void> _close() async {
+    _disposed = true;
+    _scanGeneration += 1;
+    for (final timer in [_ticker, _cycle, _flushTimer, _saveTimer]) {
+      timer?.cancel();
+    }
+    // Cancelling takes effect at once; nothing waits for the bus to drop its match rules.
+    for (final subscription in _subscriptions) {
+      unawaited(subscription.cancel());
+    }
+    await _save();
+    await scanner.close();
+    await notifier.close();
   }
 
   @override
   void dispose() {
-    _disposed = true;
-    for (final timer in [_ticker, _cycle, _flushTimer, _saveTimer]) {
-      timer?.cancel();
-    }
-    for (final subscription in _subscriptions) {
-      unawaited(subscription.cancel());
-    }
-    unawaited(_save());
-    unawaited(scanner.close());
-    unawaited(notifier.close());
+    unawaited(shutdown());
     super.dispose();
   }
 
   void pause() {
     _paused = true;
+    _dropPending();
     unawaited(_applyScanning());
-    notifyListeners();
+    _changed();
   }
 
   void resume() {
     _paused = false;
     unawaited(_applyScanning());
-    notifyListeners();
+    _changed();
   }
 
   void startLearning() {
+    _learnWhenScanning = false;
     _guard.startLearning(_now);
-    notifyListeners();
+    _wasLearning = true;
+    // Whatever was about to be announced is about to be learned instead.
+    _dropPending();
+    _changed();
   }
 
   void stopLearning() {
+    _learnWhenScanning = false;
     _guard.stopLearning();
-    notifyListeners();
+    _finishLearning();
+    _changed();
   }
 
   void updateSettings(Settings next) {
@@ -157,7 +193,7 @@ class NearbyController extends ChangeNotifier {
     _guard.settings = next;
     _saveSoon();
     if (rescan) unawaited(_applyScanning());
-    notifyListeners();
+    _changed();
   }
 
   void setWhitelisted(String address, bool listed) {
@@ -166,13 +202,13 @@ class NearbyController extends ChangeNotifier {
         : _whitelist.remove(address);
     if (!changed) return;
     _saveSoon();
-    notifyListeners();
+    _changed();
   }
 
   void renameWhitelisted(String address, String? label) {
     _whitelist.rename(address, label);
     _saveSoon();
-    notifyListeners();
+    _changed();
   }
 
   /// Whitelists every device in range whose address is stable; returns how many were added.
@@ -183,7 +219,7 @@ class NearbyController extends ChangeNotifier {
     }
     if (added > 0) {
       _saveSoon();
-      notifyListeners();
+      _changed();
     }
     return added;
   }
@@ -203,7 +239,7 @@ class NearbyController extends ChangeNotifier {
 
   void clearArrivals() {
     _arrivals.clear();
-    notifyListeners();
+    _changed();
   }
 
   /// Plays the ping and shows a sample notification, so the user can check both work.
@@ -218,6 +254,22 @@ class NearbyController extends ChangeNotifier {
     return (ping: pinged, notify: shown != null);
   }
 
+  void _changed() {
+    if (!_disposed) notifyListeners();
+  }
+
+  void _onScannerState() {
+    if (_learnWhenScanning && scanner.state.status == ScannerStatus.scanning) startLearning();
+    _changed();
+  }
+
+  void _finishLearning() {
+    _wasLearning = false;
+    if (_learnedOnce) return;
+    _learnedOnce = true;
+    _saveSoon();
+  }
+
   void _onSighting(Sighting sighting) {
     final device = _tracker.ingest(sighting);
     switch (_guard.observe(device, sighting.at)) {
@@ -229,6 +281,12 @@ class NearbyController extends ChangeNotifier {
       case null:
         break;
     }
+  }
+
+  void _dropPending() {
+    _pending.clear();
+    _flushTimer?.cancel();
+    _flushTimer = null;
   }
 
   void _scheduleFlush() {
@@ -248,15 +306,19 @@ class NearbyController extends ChangeNotifier {
     final batch = {for (final device in _pending) device.address: device};
     _pending.clear();
     batch.removeWhere((address, _) => _whitelist.contains(address));
-    if (batch.isEmpty || _disposed) return;
+    if (batch.isEmpty || _disposed || _paused || _guard.isLearning(_clock())) return;
     final at = _lastAlertAt = _clock();
     _arrivals.insertAll(0, batch.values.map((device) => ArrivalRecord(device, at)));
     if (_arrivals.length > _arrivalLog) _arrivals.removeRange(_arrivalLog, _arrivals.length);
-    notifyListeners();
+    _changed();
     if (_settings.ping) unawaited(pinger.ping());
     if (_settings.notify) {
       final id = await notifier.show(noticeFor(batch.values.toList()));
-      if (id != null) _noticeTargets[id] = batch.keys.toList();
+      if (id == null) return;
+      _noticeTargets[id] = batch.keys.toList();
+      while (_noticeTargets.length > _openNotices) {
+        _noticeTargets.remove(_noticeTargets.keys.first);
+      }
     }
   }
 
@@ -267,7 +329,7 @@ class NearbyController extends ChangeNotifier {
       _whitelist.add(address, name: _tracker[address]?.name, at: _clock());
     }
     _saveSoon();
-    notifyListeners();
+    _changed();
   }
 
   void _tick() {
@@ -275,40 +337,56 @@ class NearbyController extends ChangeNotifier {
     _tracker.prune(_now);
     _guard.prune(_now);
     _devices = _tracker.devices();
-    notifyListeners();
+    final learningNow = learning;
+    if (_wasLearning && !learningNow) _finishLearning();
+    _wasLearning = learningNow;
+    _changed();
   }
 
-  /// Starts or stops discovery to match pause and the duty cycle.
+  /// Starts or stops discovery to match pause and the duty cycle. A newer call supersedes an older one
+  /// still waiting on the scanner, so overlapping calls never leave a stray cycle timer behind.
   Future<void> _applyScanning() async {
+    final generation = ++_scanGeneration;
     _cycle?.cancel();
+    _cycle = null;
     _resting = false;
     if (_disposed) return;
     if (_paused) return scanner.stopDiscovery();
     await scanner.startDiscovery(classic: _settings.includeClassic);
-    if (_settings.continuous || _disposed) return;
+    if (generation != _scanGeneration || _settings.continuous) return;
     _cycle = Timer(Duration(seconds: _settings.scanOnSeconds), () {
       _resting = true;
       unawaited(scanner.stopDiscovery());
       _cycle = Timer(Duration(seconds: _settings.scanOffSeconds), () => unawaited(_applyScanning()));
-      notifyListeners();
+      _changed();
     });
   }
 
   void _saveSoon() {
     _dirty = true;
     _saveTimer?.cancel();
-    _saveTimer = Timer(_saveAfter, () => unawaited(_save()));
+    if (!_disposed) _saveTimer = Timer(_saveAfter, () => unawaited(_save()));
   }
 
-  /// Writes settings and whitelist if anything changed. A first run quit before anything was learned
-  /// leaves no whitelist behind, so the next start learns again.
-  Future<void> _save() async {
+  /// Writes everything if anything changed. Writes run one at a time; a failed write stays dirty and is
+  /// retried.
+  Future<void> _save() {
     _saveTimer?.cancel();
     _saveTimer = null;
+    return _saving = _saving.then((_) => _write());
+  }
+
+  Future<void> _write() async {
     if (!_dirty) return;
     _dirty = false;
-    await store.write(settingsFile, _settings.toJson());
-    await store.write(whitelistFile, _whitelist.toJson());
+    try {
+      await store.write(settingsFile, _settings.toJson());
+      await store.write(whitelistFile, _whitelist.toJson());
+      await store.write(stateFile, {'learned': _learnedOnce});
+    } catch (_) {
+      _dirty = true;
+      if (!_disposed) _saveTimer = Timer(_saveRetryAfter, () => unawaited(_save()));
+    }
   }
 }
 

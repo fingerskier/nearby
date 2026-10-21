@@ -315,7 +315,11 @@ class NearbyController extends ChangeNotifier {
     if (_settings.notify) {
       final id = await notifier.show(noticeFor(batch.values.toList()));
       if (id == null) return;
-      _noticeTargets[id] = batch.keys.toList();
+      // Only fixed addresses can be whitelisted; a rotating one would never match again.
+      _noticeTargets[id] = [
+        for (final device in batch.values)
+          if (device.kind.isStable) device.address,
+      ];
       while (_noticeTargets.length > _openNotices) {
         _noticeTargets.remove(_noticeTargets.keys.first);
       }
@@ -390,19 +394,23 @@ class NearbyController extends ChangeNotifier {
   }
 }
 
-/// One notification for a batch of arrivals.
+/// One notification for a batch of arrivals. Its Whitelist button covers only devices with a fixed address.
 Notice noticeFor(List<TrackedDevice> devices) {
   String line(TrackedDevice device) => [
     deviceLabel(name: device.name, manufacturer: device.manufacturer),
     '≈ ${formatDistance(device.distance)}',
     device.address,
+    if (!device.kind.isStable) 'rotating address',
   ].join(' · ');
-  if (devices.length == 1) {
-    return Notice(summary: 'New device nearby', body: line(devices.single), actions: const {'whitelist': 'Whitelist'});
-  }
+  final listable = devices.where((device) => device.kind.isStable).length;
+  final actions = switch (listable) {
+    0 => const <String, String>{},
+    _ when listable < devices.length => {'whitelist': 'Whitelist $listable'},
+    _ => {'whitelist': devices.length == 1 ? 'Whitelist' : 'Whitelist all'},
+  };
   return Notice(
-    summary: '${devices.length} new devices nearby',
+    summary: devices.length == 1 ? 'New device nearby' : '${devices.length} new devices nearby',
     body: devices.map(line).join('\n'),
-    actions: const {'whitelist': 'Whitelist all'},
+    actions: actions,
   );
 }

@@ -88,6 +88,13 @@ void main() {
       expect(notice.actions, {'whitelist': 'Whitelist all'});
     });
 
+    test('offers to whitelist only devices with a fixed address', () {
+      final rotating = tracked('6E:1B:00:00:00:04', kind: AddressKind.resolvable);
+      expect(noticeFor([rotating]).actions, isEmpty);
+      expect(noticeFor([rotating]).body, endsWith('rotating address'));
+      expect(noticeFor([tracked('AA:00:00:00:00:01'), rotating]).actions, {'whitelist': 'Whitelist 1'});
+    });
+
     test('escapes markup in device names', () {
       expect(escapeMarkup('<b>Tom & Jerry</b>'), '&lt;b&gt;Tom &amp; Jerry&lt;/b&gt;');
     });

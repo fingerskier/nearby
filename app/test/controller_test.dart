@@ -364,6 +364,25 @@ void reviewFixes() {
     });
   });
 
+  test('the notification button never whitelists a rotating address', () {
+    fakeAsync((async) {
+      final rig = Rig(async, saved: {...savedWhitelist([]), settingsFile: const Settings(alertRotating: true).toJson()})
+        ..start();
+      rig.scanner.emit(sight(phone, at: rig.now, kind: AddressKind.resolvable));
+      rig.scanner.emit(sight(stranger, at: rig.now));
+      async.elapse(const Duration(milliseconds: 300));
+      rig.scanner.emit(sight(phone, at: rig.now, kind: AddressKind.resolvable));
+      rig.scanner.emit(sight(stranger, at: rig.now));
+      rig.settle();
+      expect(rig.notifier.shown.single.actions, {'whitelist': 'Whitelist 1'});
+      rig.notifier.press(1, 'whitelist');
+      async.elapse(const Duration(seconds: 1));
+      expect(rig.controller.whitelist.contains(stranger), isTrue);
+      expect(rig.controller.whitelist.contains(phone), isFalse);
+      rig.controller.dispose();
+    });
+  });
+
   test('a dismissed notification forgets its devices', () {
     fakeAsync((async) {
       final rig = Rig(async, saved: savedWhitelist([]))..start();

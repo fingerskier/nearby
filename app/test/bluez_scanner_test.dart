@@ -13,7 +13,7 @@ const _adapterInterface = 'org.bluez.Adapter1';
 
 /// Just enough of BlueZ's Adapter1 to drive discovery.
 class FakeAdapter extends DBusObject {
-  FakeAdapter() : super(DBusObjectPath('/org/bluez/hci0'));
+  FakeAdapter([String name = 'hci0']) : super(DBusObjectPath('/org/bluez/$name'));
 
   final calls = <String>[];
   Map<String, DBusValue>? filter;
@@ -93,6 +93,15 @@ class FakeBluez {
     await client.registerObject(adapter);
     return this;
   }
+
+  Future<FakeAdapter> addAdapter(String name) async {
+    final adapter = FakeAdapter(name);
+    await client.registerObject(adapter);
+    return adapter;
+  }
+
+  /// Unplugs [adapter]: BlueZ reports its interfaces removed.
+  Future<void> removeAdapter(FakeAdapter adapter) => client.unregisterObject(adapter);
 
   Future<FakeDevice> addDevice(FakeDevice device) async {
     await client.registerObject(device);
@@ -191,6 +200,16 @@ void main() {
     await bluez.adapter.setPowered(true);
     await eventually(() => scanner.state.status == ScannerStatus.scanning, reason: 'scanning again');
     expect(bluez.adapter.calls.where((call) => call == 'StartDiscovery'), hasLength(2));
+  });
+
+  test(skip: !_haveDaemon, 'moves to another adapter when the one in use is unplugged', () async {
+    final spare = await bluez.addAdapter('hci1');
+    await scanner.startDiscovery(classic: false);
+    expect(bluez.adapter.discovering, isTrue);
+    expect(spare.discovering, isFalse);
+    await bluez.removeAdapter(bluez.adapter);
+    await eventually(() => spare.discovering, reason: 'discovery on hci1');
+    expect(scanner.state.status, ScannerStatus.scanning);
   });
 
   test(skip: !_haveDaemon, 'recovers when bluetoothd restarts without saying goodbye', () async {

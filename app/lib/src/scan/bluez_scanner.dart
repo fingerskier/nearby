@@ -81,9 +81,11 @@ class BluezScanner implements Scanner {
   final _sightings = StreamController<Sighting>.broadcast();
   final _states = StreamController<ScannerState>.broadcast();
   final _devices = <DBusObjectPath, Map<String, DBusValue>>{};
+
+  /// Every adapter BlueZ has, so another can take over if the one in use goes away.
+  final _adapters = <DBusObjectPath, Map<String, DBusValue>>{};
   final _subscriptions = <StreamSubscription<Object?>>[];
   DBusRemoteObject? _adapter;
-  var _adapterProperties = <String, DBusValue>{};
   var _state = const ScannerState(ScannerStatus.starting);
   var _wanted = false;
   var _classic = false;
@@ -101,6 +103,8 @@ class BluezScanner implements Scanner {
 
   @override
   ScannerState get state => _state;
+
+  Map<String, DBusValue> get _adapterProperties => _adapters[_adapter?.path] ?? const {};
 
   bool get _powered => _bool(_adapterProperties['Powered']) ?? false;
 
@@ -156,7 +160,7 @@ class BluezScanner implements Scanner {
   /// and start over with the new one.
   void _onOwnerChanged(DBusNameOwnerChangedEvent event) {
     _adapter = null;
-    _adapterProperties = {};
+    _adapters.clear();
     _devices.clear();
     _discovering = false;
     _refresh();
@@ -214,10 +218,10 @@ class BluezScanner implements Scanner {
         _refresh();
       case DBusObjectManagerInterfacesRemovedSignal():
         if (signal.interfaces.contains(_deviceInterface)) _devices.remove(signal.changedPath);
-        if (signal.interfaces.contains(_adapterInterface) && signal.changedPath == _adapter?.path) {
-          _adapter = null;
-          _adapterProperties = {};
-          _discovering = false;
+        if (signal.interfaces.contains(_adapterInterface)) {
+          _adapters.remove(signal.changedPath);
+          // Unplugged: carry on with another adapter if there is one.
+          if (signal.changedPath == _adapter?.path) _select();
         }
         _refresh();
       case DBusPropertiesChangedSignal():
@@ -229,11 +233,9 @@ class BluezScanner implements Scanner {
 
   void _onAdded(DBusObjectPath path, Map<String, Map<String, DBusValue>> interfaces) {
     final adapter = interfaces[_adapterInterface];
-    if (adapter != null && _adapter == null) {
-      _adapter = DBusRemoteObject(_bus, name: _bluez, path: path);
-      _adapterProperties = Map.of(adapter);
-      // A new or restarted bluetoothd brings its adapter back without our discovery session.
-      if (_wanted) unawaited(_reconcile());
+    if (adapter != null) {
+      _adapters[path] = Map.of(adapter);
+      if (_adapter == null) _select();
     }
     final device = interfaces[_deviceInterface];
     if (device != null) {
@@ -249,10 +251,13 @@ class BluezScanner implements Scanner {
       properties.addAll(signal.changedProperties);
       signal.invalidatedProperties.forEach(properties.remove);
       if (signal.changedProperties.containsKey('RSSI')) _emit(signal.path, properties);
-    } else if (signal.propertiesInterface == _adapterInterface && signal.path == _adapter?.path) {
+    } else if (signal.propertiesInterface == _adapterInterface) {
+      final properties = _adapters[signal.path];
+      if (properties == null) return;
       final wasPowered = _powered;
-      _adapterProperties.addAll(signal.changedProperties);
-      signal.invalidatedProperties.forEach(_adapterProperties.remove);
+      properties.addAll(signal.changedProperties);
+      signal.invalidatedProperties.forEach(properties.remove);
+      if (signal.path != _adapter?.path) return;
       if (!_powered) {
         _discovering = false;
       } else if (!wasPowered) {
@@ -260,6 +265,16 @@ class BluezScanner implements Scanner {
       }
       _refresh();
     }
+  }
+
+  /// Picks the adapter to scan with, preferring one that is powered on, and starts over on it. A new or
+  /// restarted bluetoothd brings its adapter back without our discovery session.
+  void _select() {
+    final paths = _adapters.keys.toList()..sort((a, b) => a.value.compareTo(b.value));
+    final path = paths.where((path) => _bool(_adapters[path]!['Powered']) ?? false).firstOrNull ?? paths.firstOrNull;
+    _adapter = path == null ? null : DBusRemoteObject(_bus, name: _bluez, path: path);
+    _discovering = false;
+    if (_wanted && path != null) unawaited(_reconcile());
   }
 
   void _emit(DBusObjectPath path, Map<String, DBusValue> properties) {

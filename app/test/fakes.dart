@@ -60,6 +60,9 @@ class FakeScanner implements Scanner {
 
   void powerOff() => _set(ScannerStatus.poweredOff);
 
+  /// The user declined the scanning permission.
+  void deny() => _set(ScannerStatus.noPermission);
+
   /// Bluetooth came back on; a scanner that was asked to scan resumes.
   void powerOn() => _set(wanted ? ScannerStatus.scanning : ScannerStatus.idle);
 
@@ -91,6 +94,9 @@ class FakeScanner implements Scanner {
     wanted = false;
     if (state.status == ScannerStatus.scanning) _set(ScannerStatus.idle);
   }
+
+  @override
+  Future<void> requestAccess() async => calls.add('request access');
 
   @override
   Future<void> close() async => calls.add('close');
@@ -127,6 +133,19 @@ class FakeNotifier implements Notifier {
   Future<int?> show(Notice notice) async {
     shown.add(notice);
     return shown.length;
+  }
+
+  /// Whether the user lets the app show notifications; [requestAccess] turns them on.
+  var permitted = true;
+  var requests = 0;
+
+  @override
+  Future<bool> allowed() async => permitted;
+
+  @override
+  Future<void> requestAccess() async {
+    requests += 1;
+    permitted = true;
   }
 
   @override

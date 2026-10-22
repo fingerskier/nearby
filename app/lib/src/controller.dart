@@ -74,6 +74,7 @@ class NearbyController extends ChangeNotifier {
   var _learnWhenScanning = false;
   var _wasLearning = false;
   var _scanGeneration = 0;
+  var _notificationsBlocked = false;
   var _dirty = false;
   Timer? _ticker;
   Timer? _cycle;
@@ -100,6 +101,9 @@ class NearbyController extends ChangeNotifier {
   bool get resting => _resting;
   bool get learning => _guard.isLearning(_now);
 
+  /// The user turned this app's notifications off, so arrivals can only ping.
+  bool get notificationsBlocked => _notificationsBlocked;
+
   /// First-run learning is waiting for the scanner to start.
   bool get learningPending => _learnWhenScanning;
 
@@ -123,6 +127,9 @@ class NearbyController extends ChangeNotifier {
       ..add(notifier.actions.listen(_onNoticeAction, onError: (Object _) {}))
       ..add(notifier.closed.listen(_noticeTargets.remove, onError: (Object _) {}));
     await scanner.open();
+    if (_disposed) return;
+    // After open, which on Android has asked for the notification permission too.
+    await checkNotifications();
     if (_disposed) return;
     _ticker = Timer.periodic(_tickEvery, (_) => _tick());
     _ready = true;
@@ -165,6 +172,22 @@ class NearbyController extends ChangeNotifier {
     _paused = false;
     unawaited(_applyScanning());
     _changed();
+  }
+
+  /// Asks the user for whatever the scanner is missing, such as Android's Nearby devices permission.
+  Future<void> requestScannerAccess() => scanner.requestAccess();
+
+  /// Rereads whether notifications are allowed, e.g. when the user comes back from the system settings.
+  Future<void> checkNotifications() async {
+    final blocked = !await notifier.allowed();
+    if (blocked == _notificationsBlocked) return;
+    _notificationsBlocked = blocked;
+    _changed();
+  }
+
+  Future<void> requestNotifications() async {
+    await notifier.requestAccess();
+    await checkNotifications();
   }
 
   void startLearning() {

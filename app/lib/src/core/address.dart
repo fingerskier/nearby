@@ -27,3 +27,16 @@ AddressKind classifyAddress(String address, String? addressType) {
     _ => AddressKind.nonResolvable,
   };
 }
+
+/// Best guess when the platform doesn't say whether an address is public or random (Android before 15).
+/// Only a resolvable address is told apart, by its top bits 01: that is how phones, watches and earbuds hide.
+/// A public address whose maker prefix happens to start with 01 is misread as rotating, and a
+/// non-resolvable one as fixed.
+AddressKind guessAddressKind(String address) {
+  final top = address.length >= 2 ? int.tryParse(address.substring(0, 2), radix: 16) : null;
+  return switch (top == null ? null : top >> 6) {
+    1 => AddressKind.resolvable,
+    3 => AddressKind.staticRandom,
+    _ => AddressKind.public,
+  };
+}

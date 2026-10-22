@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status bar icon: the radar mark, white on transparent as Android requires. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M16,13.5a2.5,2.5 0,1 1,0 5a2.5,2.5 0,1 1,0 -5z" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M9.5,9.5a9.2,9.2 0,0 0,0 13M22.5,9.5a9.2,9.2 0,0 1,0 13M5,5a15.5,15.5 0,0 0,0 22M27,5a15.5,15.5 0,0 1,0 22" />
+</vector>

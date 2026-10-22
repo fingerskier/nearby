@@ -28,6 +28,8 @@ class FakePlugin {
         'state' => {'status': status, 'error': null},
         'requestPermissions' => status != 'noPermission',
         'notify' => notifications ? ++lastId : null,
+        'notificationsAllowed' => notifications,
+        'requestNotifications' || 'requestScanPermission' => true,
         'ping' => true,
         _ => null,
       };
@@ -132,7 +134,7 @@ void main() {
       expect(scanner.state.status, ScannerStatus.noPermission);
 
       await scanner.requestAccess();
-      expect(plugin.calls.last, 'requestPermissions');
+      expect(plugin.calls.last, 'requestScanPermission');
     });
 
     test('follows status events', () async {
@@ -209,6 +211,15 @@ void main() {
       for (final subscription in subscriptions) {
         await subscription.cancel();
       }
+    });
+
+    test('asks the plugin whether notifications are allowed, and for them', () async {
+      final notifier = AndroidNotifier(channel);
+      expect(await notifier.allowed(), isTrue);
+      plugin.notifications = false;
+      expect(await notifier.allowed(), isFalse);
+      await notifier.requestAccess();
+      expect(plugin.calls, ['notificationsAllowed', 'notificationsAllowed', 'requestNotifications']);
     });
 
     test('the pinger plays through the plugin', () async {

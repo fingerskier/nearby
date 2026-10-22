@@ -61,6 +61,14 @@ class HomePage extends StatelessWidget {
               : Column(
                   children: [
                     if (controller.learning) _LearningBanner(controller: controller),
+                    if (controller.notificationsBlocked && controller.settings.notify)
+                      _ProblemBanner(
+                        icon: Icons.notifications_off_outlined,
+                        message: controller.settings.ping
+                            ? 'Notifications are off for nearby, so new devices only ping.'
+                            : 'Notifications are off for nearby, so new devices go unannounced.',
+                        action: TextButton(onPressed: controller.requestNotifications, child: const Text('Allow')),
+                      ),
                     if (_problem(controller.scannerState, host) case final problem?)
                       _ProblemBanner(
                         message: controller.learningPending
@@ -227,17 +235,18 @@ class _LearningBanner extends StatelessWidget {
 }
 
 class _ProblemBanner extends StatelessWidget {
-  const _ProblemBanner({required this.message, this.action});
+  const _ProblemBanner({required this.message, this.action, this.icon = Icons.bluetooth_disabled});
 
   final String message;
   final Widget? action;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     return MaterialBanner(
       backgroundColor: colors.errorContainer,
-      leading: Icon(Icons.bluetooth_disabled, color: colors.onErrorContainer),
+      leading: Icon(icon, color: colors.onErrorContainer),
       content: Text(message, style: TextStyle(color: colors.onErrorContainer)),
       actions: [action ?? const SizedBox.shrink()],
     );

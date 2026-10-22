@@ -30,6 +30,12 @@ abstract interface class Notifier {
   /// Shows [notice] and returns its id, or null if no notification server answered.
   Future<int?> show(Notice notice);
 
+  /// False when the user has turned this app's notifications off (Android).
+  Future<bool> allowed();
+
+  /// Asks the user to turn notifications on: the permission dialog, or the system's settings page.
+  Future<void> requestAccess();
+
   Future<void> close();
 }
 
@@ -100,6 +106,13 @@ class DesktopNotifier implements Notifier {
       return null;
     }
   }
+
+  /// The desktop shows whatever the server accepts; there is nothing to allow.
+  @override
+  Future<bool> allowed() async => true;
+
+  @override
+  Future<void> requestAccess() async {}
 
   Future<bool> _supportsMarkup() async {
     try {

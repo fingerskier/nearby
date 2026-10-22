@@ -15,18 +15,31 @@ import android.net.Uri
 class Alerts(private val context: Context) {
     private val manager = context.getSystemService(NotificationManager::class.java)
     private var nextId = FIRST_ID
+    private val shown = NewestIds()
 
     /** Held so the sound isn't cut short when the Ringtone is collected. */
     private var tone: Ringtone? = null
 
     init {
         createChannels(context)
+        // Arrivals from an earlier process: what their buttons would whitelist went with it, and their ids are
+        // about to be reused.
+        for (notification in manager.activeNotifications) {
+            if (notification.id >= FIRST_ID) manager.cancel(notification.id)
+        }
     }
 
-    /** Posts a notification and returns its id, or null when the user has turned these notifications off. */
+    /** Whether arrival notifications can appear: the app's notifications and their channel are both on. */
+    fun allowed(): Boolean =
+        manager.areNotificationsEnabled() &&
+            manager.getNotificationChannel(ARRIVALS)?.importance != NotificationManager.IMPORTANCE_NONE
+
+    /**
+     * Posts a notification and returns its id, or null when the user has turned these notifications off. Only
+     * the newest 20 stay up; older ones are taken down and reported dismissed.
+     */
     fun show(title: String, body: String, actions: Map<String, String>): Int? {
-        val channel = manager.getNotificationChannel(ARRIVALS)
-        if (!manager.areNotificationsEnabled() || channel?.importance == NotificationManager.IMPORTANCE_NONE) return null
+        if (!allowed()) return null
         val id = nextId++
         val builder = Notification.Builder(context, ARRIVALS)
             .setSmallIcon(R.drawable.ic_stat_nearby)
@@ -41,7 +54,16 @@ class Alerts(private val context: Context) {
             builder.addAction(Notification.Action.Builder(null, label, AlertReceiver.intent(context, AlertReceiver.PRESSED, id, key)).build())
         }
         manager.notify(id, builder.build())
+        for (old in shown.add(id)) {
+            manager.cancel(old)
+            Events.emit(mapOf("type" to "dismissed", "id" to old))
+        }
         return id
+    }
+
+    /** Takes down every arrival notification, e.g. when the app quits and nothing is left to act on them. */
+    fun cancelAll() {
+        for (id in shown.clear()) manager.cancel(id)
     }
 
     /** Plays the default notification sound; false if there is none. */

@@ -1,7 +1,6 @@
 package io.github.fingerskier.nearby
 
 import android.Manifest
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -44,11 +43,12 @@ class NearbyPlugin :
     private lateinit var scanner: LeScanner
     private lateinit var alerts: Alerts
     private var activity: ActivityPluginBinding? = null
-    private var pendingRequest: MethodChannel.Result? = null
-    private var askedBefore = false
+    private var pendingAnswer: (() -> Unit)? = null
 
-    private val permissions = buildList {
-        add(Manifest.permission.BLUETOOTH_SCAN)
+    /** Permissions this process has shown the dialog for. */
+    private val asked = mutableSetOf<String>()
+
+    private val notificationPermission = buildList {
         if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
     }
 
@@ -87,7 +87,7 @@ class NearbyPlugin :
     override fun onDetachedFromActivity() {
         activity?.removeRequestPermissionsResultListener(this)
         activity = null
-        answerPermissionRequest()
+        answer()
     }
 
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) = onAttachedToActivity(binding)
@@ -100,7 +100,15 @@ class NearbyPlugin :
                 val (status, error) = scanner.status()
                 result.success(mapOf("status" to status, "error" to error))
             }
-            "requestPermissions" -> requestPermissions(result)
+            // On first launch: everything the app needs, in one go.
+            "requestPermissions" -> ask(listOf(Manifest.permission.BLUETOOTH_SCAN) + notificationPermission, ::appSettings) {
+                result.success(scanner.hasPermission())
+            }
+            "requestScanPermission" -> ask(listOf(Manifest.permission.BLUETOOTH_SCAN), ::appSettings) {
+                result.success(scanner.hasPermission())
+            }
+            "notificationsAllowed" -> result.success(alerts.allowed())
+            "requestNotifications" -> requestNotifications(result)
             "refresh" -> {
                 scanner.refresh()
                 if (scanner.wanted) startService()
@@ -136,45 +144,53 @@ class NearbyPlugin :
     }
 
     /**
-     * Asks for whatever is missing and answers whether scanning is allowed. Android stops showing the dialog
-     * once the user has declined twice, so after that this opens the app's settings page instead.
+     * Shows the permission dialog for whichever of [wanted] are missing, then calls [done]. Android stops showing
+     * the dialog for a permission once the user has declined it twice, so after that this opens [settings] instead.
      */
-    private fun requestPermissions(result: MethodChannel.Result) {
+    private fun ask(wanted: List<String>, settings: () -> Intent, done: () -> Unit) {
         val host = activity?.activity
-        val missing = permissions.filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-        if (missing.isEmpty() || host == null || pendingRequest != null) {
-            result.success(scanner.hasPermission())
-            return
+        val missing = wanted.filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty() || host == null || pendingAnswer != null) return done()
+        if (missing.all { it in asked && !host.shouldShowRequestPermissionRationale(it) }) {
+            host.startActivity(settings())
+            return done()
         }
-        if (askedBefore && missing.none { host.shouldShowRequestPermissionRationale(it) }) {
-            openSettings(host)
-            result.success(scanner.hasPermission())
-            return
-        }
-        askedBefore = true
-        pendingRequest = result
+        asked += missing
+        pendingAnswer = done
         host.requestPermissions(missing.toTypedArray(), REQUEST_CODE)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray): Boolean {
         if (requestCode != REQUEST_CODE) return false
-        answerPermissionRequest()
+        answer()
         return true
     }
 
-    private fun answerPermissionRequest() {
-        val result = pendingRequest ?: return
-        pendingRequest = null
+    private fun answer() {
+        val done = pendingAnswer ?: return
+        pendingAnswer = null
         scanner.refresh()
         if (scanner.wanted) startService()
-        result.success(scanner.hasPermission())
+        done()
     }
 
-    private fun openSettings(host: Activity) {
-        host.startActivity(
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)),
-        )
+    /** The dialog while Android still shows it, otherwise the app's notification settings. */
+    private fun requestNotifications(result: MethodChannel.Result) {
+        val granted = notificationPermission.all { context.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
+        if (granted) {
+            // Allowed, but turned off in the system settings.
+            if (!alerts.allowed()) activity?.activity?.startActivity(notificationSettings())
+            result.success(alerts.allowed())
+            return
+        }
+        ask(notificationPermission, ::notificationSettings) { result.success(alerts.allowed()) }
     }
+
+    private fun appSettings() =
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+
+    private fun notificationSettings() =
+        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
 
     /** Android only grants a connected-device service once the Nearby devices permission is in place. */
     private fun startService() {
@@ -184,6 +200,7 @@ class NearbyPlugin :
     /** The engine outlives the activity on purpose (see MainActivity), so quitting means ending the process. */
     private fun exit() {
         scanner.want(false)
+        alerts.cancelAll()
         WatchService.stop(context)
         activity?.activity?.finishAndRemoveTask()
         Handler(Looper.getMainLooper()).postDelayed({ Process.killProcess(Process.myPid()) }, 300)

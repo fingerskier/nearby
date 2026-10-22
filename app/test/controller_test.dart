@@ -84,6 +84,28 @@ extension on Whitelist {
 void main() {
   group('review fixes', reviewFixes);
 
+  test('knows when notifications are turned off, and can ask for them', () {
+    fakeAsync((async) {
+      final rig = Rig(async, saved: savedWhitelist([]));
+      rig.notifier.permitted = false;
+      rig.start();
+      expect(rig.controller.notificationsBlocked, isTrue);
+
+      rig.controller.requestNotifications();
+      async.flushMicrotasks();
+      expect(rig.notifier.requests, 1);
+      expect(rig.controller.notificationsBlocked, isFalse);
+
+      // Turned off again in the system settings, then rechecked on return.
+      rig.notifier.permitted = false;
+      rig.controller.checkNotifications();
+      async.flushMicrotasks();
+      expect(rig.controller.notificationsBlocked, isTrue);
+      rig.controller.dispose();
+      async.flushMicrotasks();
+    });
+  });
+
   test('a first run learns what is around, then alerts on newcomers', () {
     fakeAsync((async) {
       final rig = Rig(async)..start();

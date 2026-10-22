@@ -55,7 +55,7 @@ class AndroidScanner implements Scanner {
 
   /// Shows the permission dialog again, or the app's settings page once Android stops showing it.
   @override
-  Future<void> requestAccess() => _channel.invoke<bool>('requestPermissions');
+  Future<void> requestAccess() => _channel.invoke<bool>('requestScanPermission');
 
   @override
   Future<void> close() async {

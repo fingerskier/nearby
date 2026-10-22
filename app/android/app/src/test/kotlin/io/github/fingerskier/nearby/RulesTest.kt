@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-class ScanRulesTest {
+class RulesTest {
     @Test
     fun startsFreelyUnderTheLimit() {
         val limiter = StartLimiter()
@@ -45,6 +45,16 @@ class ScanRulesTest {
         assertEquals("random", addressTypeName(1))
         assertNull(addressTypeName(0xFF)) // anonymous
         assertNull(addressTypeName(0xFFFF)) // unknown
+    }
+
+    @Test
+    fun keepsOnlyTheNewestIds() {
+        val ids = NewestIds(limit = 3)
+        assertEquals(emptyList<Int>(), (100..102).flatMap { ids.add(it) })
+        assertEquals(listOf(100), ids.add(103))
+        assertEquals(listOf(101), ids.add(104))
+        assertEquals(listOf(102, 103, 104), ids.clear())
+        assertEquals(emptyList<Int>(), ids.add(105))
     }
 
     @Test

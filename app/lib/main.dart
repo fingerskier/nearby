@@ -58,6 +58,8 @@ NearbyController _androidController(Store store) {
     notifier: AndroidNotifier(channel),
     store: store,
   );
+  // Coming back from the system settings may have turned notifications on.
+  AppLifecycleListener(onResume: () => unawaited(controller.checkNotifications()));
   var shown = '';
   controller.addListener(() {
     final text = watchingText(controller);

@@ -37,6 +37,7 @@ void main() {
     Map<String, Object?>? saved,
     HostPlatform host = HostPlatform.linux,
     Size size = const Size(1280, 800),
+    FakeNotifier? notifier,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
@@ -45,7 +46,7 @@ void main() {
     final controller = NearbyController(
       scanner: scanner,
       pinger: FakePinger(),
-      notifier: FakeNotifier(),
+      notifier: notifier ?? FakeNotifier(),
       store: MemoryStore(saved),
       clock: () => tester.binding.clock.now(),
     );
@@ -133,6 +134,17 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Include Bluetooth Classic'), findsNothing);
     expect(find.text('Show a notification, with a button to whitelist the device'), findsOneWidget);
+  });
+
+  appTest('offers to turn notifications back on', (tester) async {
+    final notifier = FakeNotifier()..permitted = false;
+    final controller = await pumpApp(tester, saved: guarding, notifier: notifier);
+    expect(find.text('Notifications are off for nearby, so new devices only ping.'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Allow'));
+    await tester.pump();
+    expect(notifier.requests, 1);
+    expect(controller.notificationsBlocked, isFalse);
+    expect(find.textContaining('Notifications are off'), findsNothing);
   });
 
   appTest('settings and whitelist pages open and edit', (tester) async {

@@ -74,3 +74,19 @@ val screenOffServiceData = intArrayOf(
     0xFD6F, // exposure notifications
     0xFE9F, // Google
 )
+
+/**
+ * The newest [limit] ids, oldest first. Android stops posting an app's notifications at 50, and the app only
+ * remembers what the newest 20 arrival notifications' buttons whitelist, so older ones are taken down.
+ */
+class NewestIds(private val limit: Int = 20) {
+    private val ids = ArrayDeque<Int>()
+
+    /** Adds [id] and returns the ids that no longer fit. */
+    fun add(id: Int): List<Int> {
+        ids.addLast(id)
+        return buildList { while (ids.size > limit) add(ids.removeFirst()) }
+    }
+
+    fun clear(): List<Int> = ids.toList().also { ids.clear() }
+}

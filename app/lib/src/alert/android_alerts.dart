@@ -34,6 +34,12 @@ class AndroidNotifier implements Notifier {
   }
 
   @override
+  Future<bool> allowed() async => await _channel.invoke<bool>('notificationsAllowed') ?? true;
+
+  @override
+  Future<void> requestAccess() => _channel.invoke<bool>('requestNotifications');
+
+  @override
   Future<void> close() async {}
 }
 

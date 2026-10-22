@@ -135,6 +135,19 @@ class FakeNotifier implements Notifier {
     return shown.length;
   }
 
+  /// Whether the user lets the app show notifications; [requestAccess] turns them on.
+  var permitted = true;
+  var requests = 0;
+
+  @override
+  Future<bool> allowed() async => permitted;
+
+  @override
+  Future<void> requestAccess() async {
+    requests += 1;
+    permitted = true;
+  }
+
   @override
   Future<void> close() async {}
 }

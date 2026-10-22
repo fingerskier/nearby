@@ -38,7 +38,13 @@ class LeScanner(
     private val power = context.getSystemService(PowerManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
     private val limiter = StartLimiter()
-    private var running = false
+
+    /**
+     * The running scan's callback. Each start gets a new one: a scan that fails after registering stays
+     * registered under its callback, and Android refuses another start with that callback as already started.
+     */
+    private var callback: ScanCallback? = null
+    private val running get() = callback != null
     private var filtered = false
     private var failure: String? = null
     private var reported: Pair<String, String?>? = null
@@ -59,19 +65,18 @@ class LeScanner(
         }
     }
 
-    private val callback = object : ScanCallback() {
+    private fun newCallback() = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            if (running) onSighting(sightingOf(result))
+            if (this === callback) onSighting(sightingOf(result))
         }
 
         override fun onBatchScanResults(results: MutableList<ScanResult>) {
-            if (running) results.forEach { onSighting(sightingOf(it)) }
+            if (this === callback) results.forEach { onSighting(sightingOf(it)) }
         }
 
         override fun onScanFailed(errorCode: Int) {
-            if (errorCode == SCAN_FAILED_ALREADY_STARTED) return
-            running = false
-            handler.removeCallbacks(renew)
+            if (this !== callback || errorCode == SCAN_FAILED_ALREADY_STARTED) return
+            stop()
             fail(scanErrorName(errorCode))
         }
     }
@@ -87,8 +92,8 @@ class LeScanner(
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 BluetoothAdapter.ACTION_STATE_CHANGED -> {
-                    // Turning Bluetooth off ends every scan; start afresh once it's back.
-                    if (adapter?.isEnabled != true) running = false
+                    // Turning Bluetooth off ends every scan and forgets its registration; start afresh once it's back.
+                    if (adapter?.isEnabled != true) callback = null
                     apply()
                 }
                 Intent.ACTION_SCREEN_OFF, Intent.ACTION_SCREEN_ON -> if (running && filtered != screenOff()) restart()
@@ -165,24 +170,25 @@ class LeScanner(
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .build()
         limiter.record(now)
+        val next = newCallback()
         try {
-            scanner.startScan(if (screenOff) screenOffFilters else null, settings, callback)
+            scanner.startScan(if (screenOff) screenOffFilters else null, settings, next)
         } catch (e: RuntimeException) {
             // SecurityException if the permission was just revoked, IllegalStateException if Bluetooth is going off.
             fail(e.message ?: e.javaClass.simpleName)
             return
         }
-        running = true
+        callback = next
         filtered = screenOff
         handler.postDelayed(renew, RENEW_MS)
     }
 
     private fun stop() {
         handler.removeCallbacks(renew)
-        if (!running) return
-        running = false
+        val current = callback ?: return
+        callback = null
         try {
-            adapter?.bluetoothLeScanner?.stopScan(callback)
+            adapter?.bluetoothLeScanner?.stopScan(current)
         } catch (_: RuntimeException) {
             // Bluetooth is already off, which stopped the scan anyway.
         }

@@ -11,6 +11,9 @@ import android.os.IBinder
 /**
  * Keeps the process, and with it the Flutter engine and the guard, running while the app is in the background
  * or swiped away. Its ongoing notification says what nearby is doing and has a Stop button.
+ *
+ * If Android reclaims the process anyway, it restarts this service, which starts the engine again, and the guard
+ * resumes without the app being opened. Stop ends the service first, so it stays down.
  */
 class WatchService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
@@ -24,9 +27,10 @@ class WatchService : Service() {
             // Android refuses a connected-device service without the Nearby devices permission; the plugin
             // starts it again once that's granted.
             stopSelf()
+            return START_NOT_STICKY
         }
-        // If Android kills the process, a restarted service would have no engine to run.
-        return START_NOT_STICKY
+        NearbyEngine.obtain(this)
+        return START_STICKY
     }
 
     override fun onDestroy() {

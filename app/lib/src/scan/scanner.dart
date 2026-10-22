@@ -1,6 +1,16 @@
 import '../core/sighting.dart';
 
-enum ScannerStatus { starting, noAdapter, poweredOff, idle, scanning, failed }
+enum ScannerStatus {
+  starting,
+  noAdapter,
+  poweredOff,
+
+  /// The user hasn't allowed scanning (Android's Nearby devices permission).
+  noPermission,
+  idle,
+  scanning,
+  failed,
+}
 
 class ScannerState {
   const ScannerState(this.status, {this.adapter, this.error});
@@ -33,6 +43,9 @@ abstract interface class Scanner {
   Future<void> startDiscovery({required bool classic});
 
   Future<void> stopDiscovery();
+
+  /// Asks the user for whatever scanning needs, such as a runtime permission; does nothing where nothing is.
+  Future<void> requestAccess();
 
   Future<void> close();
 }

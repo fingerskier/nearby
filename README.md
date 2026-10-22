@@ -11,19 +11,23 @@ Locate and map nearby devices
 * Bluetooth (other if feasible)
 * Map with relative locations
 
-## Linux app
+## Linux and Android app
 
-A Flutter desktop app in [`app/`](app/README.md) that watches for nearby Bluetooth devices through BlueZ.
+A Flutter app in [`app/`](app/README.md) that watches for nearby Bluetooth devices: through BlueZ on Linux, and through Android's Bluetooth LE scanner on Android 12 and newer.
 
 * On first launch it learns a whitelist from whatever is around.
-* After that, it plays a ping and shows a desktop notification when an unlisted device comes into range. The notification has a **Whitelist** button.
+* After that, it plays a ping and shows a notification when an unlisted device comes into range. The notification has a **Whitelist** button.
 * Each device's estimated distance is shown on a radar, using the same model as the web app.
+* On Android it keeps watching in the background, behind an ongoing notification with a **Stop** button.
 
 ```sh
 cd app
 flutter run -d linux
 flutter build linux --release && linux/packaging/install.sh
+flutter build apk --release      # build/app/outputs/flutter-apk/app-release.apk
 ```
+
+Releases are tagged by date, `vYYYY.M.D`.
 
 ## Web app
 Live at <https://fingerskier.github.io/nearby/>, deployed from `main` by `.github/workflows/pages.yml`.

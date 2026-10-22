@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nearby/src/controller.dart';
 import 'package:nearby/src/core/address.dart';
+import 'package:nearby/src/host.dart';
 import 'package:nearby/src/store.dart';
 import 'package:nearby/src/ui/app.dart';
 
@@ -31,8 +32,13 @@ void main() {
     });
   }
 
-  Future<NearbyController> pumpApp(WidgetTester tester, {Map<String, Object?>? saved}) async {
-    tester.view.physicalSize = const Size(1280, 800);
+  Future<NearbyController> pumpApp(
+    WidgetTester tester, {
+    Map<String, Object?>? saved,
+    HostPlatform host = HostPlatform.linux,
+    Size size = const Size(1280, 800),
+  }) async {
+    tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     scanner = FakeScanner();
@@ -44,7 +50,7 @@ void main() {
       clock: () => tester.binding.clock.now(),
     );
     running = controller;
-    await tester.pumpWidget(NearbyApp(controller: controller));
+    await tester.pumpWidget(NearbyApp(controller: controller, host: host));
     await controller.start();
     await tester.pump();
     return controller;
@@ -110,10 +116,30 @@ void main() {
     expect(find.textContaining('Bluetooth is off.'), findsOneWidget);
   });
 
+  appTest('on a phone, a missing permission can be asked for again, and Linux-only options are hidden', (tester) async {
+    await pumpApp(tester, saved: guarding, host: HostPlatform.android, size: const Size(412, 915));
+    scanner.deny();
+    await tester.pump();
+    expect(find.text('Not allowed'), findsOneWidget);
+    expect(find.textContaining('Nearby devices permission'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Allow'));
+    expect(scanner.calls.last, 'request access');
+
+    scanner.powerOff();
+    await tester.pump();
+    expect(find.text('Bluetooth is off. Turn it on and scanning resumes by itself.'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.text('Include Bluetooth Classic'), findsNothing);
+    expect(find.text('Show a notification, with a button to whitelist the device'), findsOneWidget);
+  });
+
   appTest('settings and whitelist pages open and edit', (tester) async {
     final controller = await pumpApp(tester, saved: guarding);
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
+    expect(find.text('Include Bluetooth Classic'), findsOneWidget);
     await tester.tap(find.text('Ping'));
     await tester.pump();
     expect(controller.settings.ping, isFalse);

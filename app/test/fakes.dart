@@ -60,6 +60,9 @@ class FakeScanner implements Scanner {
 
   void powerOff() => _set(ScannerStatus.poweredOff);
 
+  /// The user declined the scanning permission.
+  void deny() => _set(ScannerStatus.noPermission);
+
   /// Bluetooth came back on; a scanner that was asked to scan resumes.
   void powerOn() => _set(wanted ? ScannerStatus.scanning : ScannerStatus.idle);
 
@@ -91,6 +94,9 @@ class FakeScanner implements Scanner {
     wanted = false;
     if (state.status == ScannerStatus.scanning) _set(ScannerStatus.idle);
   }
+
+  @override
+  Future<void> requestAccess() async => calls.add('request access');
 
   @override
   Future<void> close() async => calls.add('close');

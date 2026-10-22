@@ -167,6 +167,9 @@ class NearbyController extends ChangeNotifier {
     _changed();
   }
 
+  /// Asks the user for whatever the scanner is missing, such as Android's Nearby devices permission.
+  Future<void> requestScannerAccess() => scanner.requestAccess();
+
   void startLearning() {
     _learnWhenScanning = false;
     _guard.startLearning(_now);

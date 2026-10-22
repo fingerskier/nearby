@@ -97,6 +97,9 @@ class _DeviceListState extends State<DeviceList> {
 
 enum _Action { calibrate, clearCalibration }
 
+/// Narrower than this, a device row folds its signal and age into the details line.
+const _compactRow = 520.0;
+
 class _DeviceRow extends StatelessWidget {
   const _DeviceRow({required this.controller, required this.device});
 
@@ -110,74 +113,93 @@ class _DeviceRow extends StatelessWidget {
     final entry = controller.whitelist[device.address];
     final listed = entry != null;
     final label = deviceLabel(label: entry?.label, name: device.name, manufacturer: device.manufacturer);
-    final details = [
-      device.address,
-      kindLabel(device.kind),
-      if (device.paired) 'paired',
-      if (device.calibrated) 'calibrated',
-    ].join(' · ');
+    final signal = '${device.rssi}\u00a0dBm';
+    final age = formatAge(controller.now.difference(device.lastSeen));
     final muted = TextStyle(color: colors.onSurfaceVariant);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Tooltip(
-            message: device.kind.isStable
-                ? (listed ? 'Whitelisted: no alert when it comes and goes' : 'Add to whitelist')
-                : 'This address rotates, so it can’t be whitelisted',
-            child: Checkbox(
-              value: listed,
-              onChanged: device.kind.isStable || listed
-                  ? (value) => controller.setWhitelisted(device.address, value ?? false)
-                  : null,
-            ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // On a phone the signal and age join the details, which may wrap, so the name keeps its room.
+        final compact = constraints.maxWidth < _compactRow;
+        final details = [
+          device.address,
+          kindLabel(device.kind),
+          if (device.paired) 'paired',
+          if (device.calibrated) 'calibrated',
+          if (compact) ...[signal, age],
+        ].join(' · ');
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Row(
+            children: [
+              Tooltip(
+                message: device.kind.isStable
+                    ? (listed ? 'Whitelisted: no alert when it comes and goes' : 'Add to whitelist')
+                    : 'This address rotates, so it can’t be whitelisted',
+                child: Checkbox(
+                  value: listed,
+                  onChanged: device.kind.isStable || listed
+                      ? (value) => controller.setWhitelisted(device.address, value ?? false)
+                      : null,
+                ),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (!listed && device.kind.isStable) ...[
-                      Icon(Icons.circle, size: 8, color: colors.error),
-                      const SizedBox(width: 6),
-                    ],
-                    Flexible(
-                      child: Text(
-                        label,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontWeight: listed ? FontWeight.normal : FontWeight.w600),
-                      ),
+                    Row(
+                      children: [
+                        if (!listed && device.kind.isStable) ...[
+                          Icon(Icons.circle, size: 8, color: colors.error),
+                          const SizedBox(width: 6),
+                        ],
+                        Flexible(
+                          child: Text(
+                            label,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontWeight: listed ? FontWeight.normal : FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Text(
+                      details,
+                      maxLines: compact ? 2 : 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.merge(muted),
                     ),
                   ],
                 ),
-                Text(details, overflow: TextOverflow.ellipsis, style: theme.textTheme.bodySmall?.merge(muted)),
+              ),
+              SizedBox(
+                width: compact ? 64 : 72,
+                child: Text('≈ ${formatDistance(device.distance)}', textAlign: TextAlign.end),
+              ),
+              if (!compact) ...[
+                SizedBox(
+                  width: 72,
+                  child: Text(signal, textAlign: TextAlign.end, style: muted),
+                ),
+                SizedBox(
+                  width: 52,
+                  child: Text(age, textAlign: TextAlign.end, style: muted),
+                ),
               ],
-            ),
-          ),
-          SizedBox(width: 72, child: Text('≈ ${formatDistance(device.distance)}', textAlign: TextAlign.end)),
-          SizedBox(
-            width: 72,
-            child: Text('${device.rssi} dBm', textAlign: TextAlign.end, style: muted),
-          ),
-          SizedBox(
-            width: 52,
-            child: Text(formatAge(controller.now.difference(device.lastSeen)), textAlign: TextAlign.end, style: muted),
-          ),
-          PopupMenuButton<_Action>(
-            tooltip: 'More',
-            onSelected: (action) => switch (action) {
-              _Action.calibrate => controller.calibrate(device.address),
-              _Action.clearCalibration => controller.clearCalibration(device.address),
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: _Action.calibrate, child: Text('Calibrate: it is 1 m away now')),
-              if (device.calibrated)
-                const PopupMenuItem(value: _Action.clearCalibration, child: Text('Clear calibration')),
+              PopupMenuButton<_Action>(
+                tooltip: 'More',
+                onSelected: (action) => switch (action) {
+                  _Action.calibrate => controller.calibrate(device.address),
+                  _Action.clearCalibration => controller.clearCalibration(device.address),
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(value: _Action.calibrate, child: Text('Calibrate: it is 1 m away now')),
+                  if (device.calibrated)
+                    const PopupMenuItem(value: _Action.clearCalibration, child: Text('Clear calibration')),
+                ],
+              ),
             ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

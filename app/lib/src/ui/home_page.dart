@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../controller.dart';
 import '../core/format.dart';
+import '../host.dart';
 import '../scan/scanner.dart';
 import 'arrivals.dart';
 import 'device_list.dart';
@@ -13,9 +14,10 @@ import 'whitelist_page.dart';
 const _wideLayout = 900.0;
 
 class HomePage extends StatelessWidget {
-  const HomePage({super.key, required this.controller});
+  const HomePage({super.key, required this.controller, this.host = HostPlatform.linux});
 
   final NearbyController controller;
+  final HostPlatform host;
 
   @override
   Widget build(BuildContext context) {
@@ -42,36 +44,49 @@ class HomePage extends StatelessWidget {
             IconButton(
               tooltip: 'Settings',
               icon: const Icon(Icons.tune),
-              onPressed: () =>
-                  Navigator.of(context)
-                      .push(MaterialPageRoute<void>(builder: (_) => SettingsPage(controller: controller))),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => SettingsPage(controller: controller, host: host),
+                ),
+              ),
             ),
             const SizedBox(width: 8),
           ],
         ),
-        body: !controller.ready
-            ? const Center(child: CircularProgressIndicator())
-            : Column(
-                children: [
-                  if (controller.learning) _LearningBanner(controller: controller),
-                  if (_problem(controller.scannerState) case final problem?)
-                    _ProblemBanner(
-                      message: controller.learningPending
-                          ? '$problem Learning the devices around you starts once scanning does.'
-                          : problem,
-                    ),
-                  Expanded(child: _Panels(controller: controller)),
-                ],
-              ),
+        // Android draws behind the navigation bar.
+        body: SafeArea(
+          top: false,
+          child: !controller.ready
+              ? const Center(child: CircularProgressIndicator())
+              : Column(
+                  children: [
+                    if (controller.learning) _LearningBanner(controller: controller),
+                    if (_problem(controller.scannerState, host) case final problem?)
+                      _ProblemBanner(
+                        message: controller.learningPending
+                            ? '$problem Learning the devices around you starts once scanning does.'
+                            : problem,
+                        action: controller.scannerState.status == ScannerStatus.noPermission
+                            ? TextButton(onPressed: controller.requestScannerAccess, child: const Text('Allow'))
+                            : null,
+                      ),
+                    Expanded(child: _Panels(controller: controller)),
+                  ],
+                ),
+        ),
       ),
     );
   }
 }
 
-String? _problem(ScannerState state) => switch (state.status) {
+String? _problem(ScannerState state, HostPlatform host) => switch (state.status) {
   ScannerStatus.noAdapter => state.error ?? 'No Bluetooth adapter found.',
-  ScannerStatus.poweredOff =>
-    'Bluetooth is off. Turn it on (for example `bluetoothctl power on`) and scanning resumes by itself.',
+  ScannerStatus.poweredOff => switch (host) {
+    HostPlatform.linux =>
+      'Bluetooth is off. Turn it on (for example `bluetoothctl power on`) and scanning resumes by itself.',
+    HostPlatform.android => 'Bluetooth is off. Turn it on and scanning resumes by itself.',
+  },
+  ScannerStatus.noPermission => 'nearby needs the Nearby devices permission to scan.',
   ScannerStatus.failed => 'Scanning failed: ${state.error}. Retrying…',
   _ => null,
 };
@@ -156,10 +171,11 @@ class _StatusChip extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     final status = controller.scannerState.status;
     final (label, background, foreground) = switch (status) {
-      ScannerStatus.noAdapter || ScannerStatus.poweredOff || ScannerStatus.failed => (
+      ScannerStatus.noAdapter || ScannerStatus.poweredOff || ScannerStatus.noPermission || ScannerStatus.failed => (
         switch (status) {
           ScannerStatus.noAdapter => 'No adapter',
           ScannerStatus.poweredOff => 'Bluetooth off',
+          ScannerStatus.noPermission => 'Not allowed',
           _ => 'Scan failed',
         },
         colors.errorContainer,
@@ -211,9 +227,10 @@ class _LearningBanner extends StatelessWidget {
 }
 
 class _ProblemBanner extends StatelessWidget {
-  const _ProblemBanner({required this.message});
+  const _ProblemBanner({required this.message, this.action});
 
   final String message;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -222,7 +239,7 @@ class _ProblemBanner extends StatelessWidget {
       backgroundColor: colors.errorContainer,
       leading: Icon(Icons.bluetooth_disabled, color: colors.onErrorContainer),
       content: Text(message, style: TextStyle(color: colors.onErrorContainer)),
-      actions: const [SizedBox.shrink()],
+      actions: [action ?? const SizedBox.shrink()],
     );
   }
 }

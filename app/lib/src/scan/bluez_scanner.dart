@@ -130,6 +130,10 @@ class BluezScanner implements Scanner {
     return _reconcile();
   }
 
+  /// BlueZ lets any local user scan.
+  @override
+  Future<void> requestAccess() async {}
+
   @override
   Future<void> close() async {
     if (_closed) return;

@@ -1,4 +1,4 @@
-name: Linux app
+name: App
 
 on:
   push:
@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  linux:
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -52,4 +52,38 @@ jobs:
         with:
           name: nearby-linux-x64
           path: app/nearby-linux-x64.tar.gz
+          if-no-files-found: error
+
+  android:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.7
+          cache: true
+
+      - run: flutter pub get
+      - run: flutter build apk --release
+
+      # The Gradle wrapper exists once Flutter has built the app.
+      - name: Kotlin unit tests
+        working-directory: app/android
+        run: ./gradlew :app:testDebugUnitTest --console=plain
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nearby-android-apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
